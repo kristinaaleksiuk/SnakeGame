@@ -142,7 +142,7 @@
     if (!table || !table.length) return note('Пока никого нет — стань первым!');
 
     const me = playerName();
-    table.slice(0, 10).forEach((r, i) => {
+    table.slice(0, 100).forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'row' + (me && sameName(r.name, me) ? ' me' : '');
       for (const [cls, text] of [['pos', i + 1], ['nm', r.name], ['sc', r.score]]) {
