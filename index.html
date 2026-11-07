@@ -290,7 +290,7 @@
   function draw(time) {
     for (let y = 0; y < ROWS; y++)
       for (let x = 0; x < COLS; x++) {
-        ctx.fillStyle = (x + y) % 2 ? '#202452' : '#252A5C';
+        ctx.fillStyle = (x + y) % 2 ? '#d0d1e1' : '#74768a';
         ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
       }
 
@@ -320,7 +320,7 @@
     for (const side of [-1, 1]) {
       const ex = cx + dir[0] * 4 + px * side * 6, ey = cy + dir[1] * 4 + py * side * 6;
       ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, 4.2, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#141731'; ctx.beginPath(); ctx.arc(ex + dir[0] * 1.2, ey + dir[1] * 1.2, 2.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#797eb0'; ctx.beginPath(); ctx.arc(ex + dir[0] * 1.2, ey + dir[1] * 1.2, 2.1, 0, Math.PI * 2); ctx.fill();
     }
   }
 
