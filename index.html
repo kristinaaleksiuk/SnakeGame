@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#181B38">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Змейка">
+<title>Змейка</title>
+<style>
+  :root {
+    --bg: #181B38;
+    --text: #F1EFFF;
+    --muted: #8D92C9;
+    --dim: #6E73AD;
+    --accent: #FFB547;
+    --overlay: rgba(20, 23, 49, 0.82);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: Bahnschrift, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    overflow: hidden;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none;
+  }
+  .size { width: min(92vw, calc(100dvh - 230px), 560px); }
+  header { display: flex; justify-content: space-between; align-items: flex-end; padding: 0 4px; }
+  header div { display: flex; flex-direction: column; }
+  header .right { align-items: flex-end; }
+  .label { font-size: 14px; color: var(--muted); }
+  .value { font-size: 44px; font-weight: 600; line-height: 1.05; }
+  #best { color: var(--accent); }
+  .board { position: relative; aspect-ratio: 1; border-radius: 18px; overflow: hidden; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #overlay {
+    position: absolute; inset: 0; background: var(--overlay);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; cursor: pointer;
+  }
+  #overlay h1 { margin: 0; font-size: clamp(30px, 9vw, 52px); font-weight: 600; }
+  #overlay p { margin: 10px 0 0; font-size: clamp(15px, 4vw, 20px); color: #A9AEE0; white-space: pre-line; }
+  footer { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  button {
+    font: inherit; font-size: 16px; color: var(--text);
+    background: #252A5C; border: 1px solid #3A4090; border-radius: 999px;
+    padding: 10px 28px; cursor: pointer;
+  }
+  button:active { background: #30367a; }
+  .hint { font-size: 13px; color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+  <header class="size">
+    <div><span class="label">Счёт</span><span class="value" id="score">0</span></div>
+    <div class="right"><span class="label">Рекорд</span><span class="value" id="best">0</span></div>
+  </header>
+
+  <div class="board size">
+    <canvas id="game"></canvas>
+    <div id="overlay">
+      <h1 id="ovTitle">Змейка</h1>
+      <p id="ovSub">Нажми, чтобы начать</p>
+    </div>
+  </div>
+
+  <footer class="size">
+    <button id="pauseBtn" type="button">Пауза</button>
+    <div class="hint">Свайпай по полю или используй стрелки / WASD. Пробел — пауза.</div>
+  </footer>
+
+<script>
+(() => {
+  const COLS = 20, ROWS = 20, CELL = 28, SIZE = COLS * CELL;
+  const HEAD = [0x8F, 0xF0, 0xD0], TAIL = [0x3B, 0x8F, 0xD9], DEAD = [0xFF, 0x6B, 0x6B], DEAD_TAIL = [0xA8, 0x4B, 0x6A];
+  const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = canvas.height = SIZE * dpr;
+  ctx.scale(dpr, dpr);
+
+  const $ = id => document.getElementById(id);
+  const scoreEl = $('score'), bestEl = $('best'), overlay = $('overlay');
+  const ovTitle = $('ovTitle'), ovSub = $('ovSub'), pauseBtn = $('pauseBtn');
+
+  let snake, dir, inputs, food, score, best = 0, state = 'ready', interval, acc = 0, last = 0, dead = false, newRecord = false;
+
+  try { best = parseInt(localStorage.getItem('snake-best'), 10) || 0; } catch (e) {}
+  bestEl.textContent = best;
+
+  function reset() {
+    const cx = COLS / 2, cy = ROWS / 2;
+    snake = [[cx, cy], [cx - 1, cy], [cx - 2, cy]];
+    dir = DIRS.right; inputs = []; score = 0; interval = 140; acc = 0;
+    dead = false; newRecord = false;
+    placeFood(); scoreEl.textContent = 0;
+  }
+
+  function placeFood() {
+    const free = [];
+    for (let y = 0; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++)
+        if (!snake.some(s => s[0] === x && s[1] === y)) free.push([x, y]);
+    food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+  }
+
+  function showOverlay(title, sub) {
+    ovTitle.textContent = title; ovSub.textContent = sub;
+    overlay.style.display = 'flex';
+  }
+
+  function start() {
+    reset(); state = 'running';
+    overlay.style.display = 'none';
+    pauseBtn.textContent = 'Пауза';
+  }
+
+  function togglePause() {
+    if (state === 'running') {
+      state = 'paused'; showOverlay('Пауза', 'Нажми, чтобы продолжить');
+      pauseBtn.textContent = 'Продолжить';
+    } else if (state === 'paused') {
+      state = 'running'; overlay.style.display = 'none';
+      pauseBtn.textContent = 'Пауза';
+    } else {
+      start();
+    }
+  }
+
+  function turn(d) {
+    if (state !== 'running') return;
+    const prev = inputs.length ? inputs[inputs.length - 1] : dir;
+    const opposite = d[0] === -prev[0] && d[1] === -prev[1];
+    const same = d[0] === prev[0] && d[1] === prev[1];
+    if (!same && !opposite && inputs.length < 3) inputs.push(d);
+  }
+
+  function step() {
+    if (inputs.length) dir = inputs.shift();
+    const head = snake[0];
+    const nx = head[0] + dir[0], ny = head[1] + dir[1];
+    const eats = food && nx === food[0] && ny === food[1];
+    const limit = eats ? snake.length : snake.length - 1;
+
+    let hit = nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS;
+    for (let i = 0; !hit && i < limit; i++)
+      if (snake[i][0] === nx && snake[i][1] === ny) hit = true;
+    if (hit) return gameOver(false);
+
+    snake.unshift([nx, ny]);
+    if (eats) {
+      score += 10; scoreEl.textContent = score;
+      interval = Math.max(60, 140 - Math.floor(score / 10) * 3);
+      if (snake.length >= COLS * ROWS) return gameOver(true);
+      placeFood();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function gameOver(won) {
+    state = 'over'; dead = !won;
+    if (score > best) {
+      best = score; newRecord = score > 0;
+      bestEl.textContent = best;
+      try { localStorage.setItem('snake-best', best); } catch (e) {}
+    }
+    if (navigator.vibrate && !won) navigator.vibrate(120);
+    showOverlay(won ? 'Победа!' : 'Игра окончена',
+      (newRecord ? 'Новый рекорд: ' + score : 'Счёт: ' + score) + '\nНажми, чтобы сыграть ещё раз');
+    pauseBtn.textContent = 'Заново';
+  }
+
+  // ---------- Отрисовка ----------
+  const lerp = (a, b, t) => 'rgb(' + a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',') + ')';
+
+  function rr(x, y, w, h, r) {
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, r);
+  }
+
+  function draw(time) {
+    for (let y = 0; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++) {
+        ctx.fillStyle = (x + y) % 2 ? '#202452' : '#252A5C';
+        ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      }
+
+    if (food) {
+      const r = 9 + Math.sin(time / 250);
+      const fx = food[0] * CELL + CELL / 2, fy = food[1] * CELL + CELL / 2;
+      const g = ctx.createRadialGradient(fx - 3, fy - 4, 1, fx, fy, r);
+      g.addColorStop(0, '#FFE09A'); g.addColorStop(1, '#FFB547');
+      ctx.save();
+      ctx.shadowColor = 'rgba(255,181,71,0.9)'; ctx.shadowBlur = 18;
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(fx, fy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    const n = snake.length;
+    const hc = dead ? DEAD : HEAD, tc = dead ? DEAD_TAIL : TAIL;
+    for (let i = n - 1; i >= 0; i--) {
+      ctx.fillStyle = lerp(hc, tc, n > 1 ? i / (n - 1) : 0);
+      rr(snake[i][0] * CELL + 1.5, snake[i][1] * CELL + 1.5, CELL - 3, CELL - 3, i === 0 ? 10 : 7);
+      ctx.fill();
+    }
+
+    // Глаза
+    const cx = snake[0][0] * CELL + CELL / 2, cy = snake[0][1] * CELL + CELL / 2;
+    const px = -dir[1], py = dir[0];
+    for (const side of [-1, 1]) {
+      const ex = cx + dir[0] * 4 + px * side * 6, ey = cy + dir[1] * 4 + py * side * 6;
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, 4.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#141731'; ctx.beginPath(); ctx.arc(ex + dir[0] * 1.2, ey + dir[1] * 1.2, 2.1, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function loop(time) {
+    const dt = time - last; last = time;
+    if (state === 'running') {
+      acc += Math.min(dt, 100);
+      while (acc >= interval && state === 'running') { acc -= interval; step(); }
+    }
+    draw(time);
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Ввод ----------
+  const keys = {
+    ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
+    ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right'
+  };
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); togglePause(); return; }
+    if (keys[e.code]) { e.preventDefault(); turn(DIRS[keys[e.code]]); }
+  });
+
+  let tx = 0, ty = 0;
+  document.addEventListener('touchstart', e => {
+    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
+    turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? DIRS.right : DIRS.left) : (dy > 0 ? DIRS.down : DIRS.up));
+    tx = t.clientX; ty = t.clientY;
+  }, { passive: false });
+
+  overlay.addEventListener('click', togglePause);
+  pauseBtn.addEventListener('click', () => { if (state === 'over') start(); else togglePause(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'running') togglePause(); });
+
+  reset();
+  requestAnimationFrame(t => { last = t; loop(t); });
+})();
+</script>
+</body>
+</html>
