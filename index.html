@@ -28,7 +28,7 @@
     gap: 16px;
     padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
     overflow: hidden;
-    touch-action: none;
+    overscroll-behavior: none;
     user-select: none; -webkit-user-select: none;
   }
   .size { width: min(92vw, calc(100dvh - 230px), 560px); }
@@ -39,14 +39,34 @@
   .value { font-size: 44px; font-weight: 600; line-height: 1.05; }
   #best { color: var(--accent); }
   .board { position: relative; aspect-ratio: 1; border-radius: 18px; overflow: hidden; }
-  canvas { width: 100%; height: 100%; display: block; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; }
   #overlay {
     position: absolute; inset: 0; background: var(--overlay);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; padding: 24px; cursor: pointer;
+    text-align: center; padding: 16px; gap: 10px;
   }
-  #overlay h1 { margin: 0; font-size: clamp(30px, 9vw, 52px); font-weight: 600; }
-  #overlay p { margin: 10px 0 0; font-size: clamp(15px, 4vw, 20px); color: #A9AEE0; white-space: pre-line; }
+  #overlay h1 { margin: 0; font-size: clamp(26px, 8vw, 44px); font-weight: 600; }
+  #overlay p { margin: 0; font-size: clamp(14px, 3.8vw, 18px); color: #A9AEE0; white-space: pre-line; }
+  #form { display: flex; gap: 8px; width: 100%; max-width: 360px; }
+  #name {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--text);
+    background: rgba(255,255,255,0.08); border: 1px solid #3A4090; border-radius: 999px;
+    padding: 10px 16px; outline: none; user-select: text; -webkit-user-select: text;
+  }
+  #name:focus { border-color: var(--accent); }
+  #playBtn { background: var(--accent); color: #181B38; border: none; font-weight: 600; padding: 10px 22px; }
+  #playBtn:active { background: #e6a23f; }
+  #lb {
+    width: 100%; max-width: 360px; flex: 1; min-height: 0; overflow-y: auto;
+    text-align: left; touch-action: pan-y;
+  }
+  .row { display: flex; gap: 8px; padding: 4px 10px; font-size: 15px; border-radius: 8px; }
+  .row:nth-child(odd) { background: rgba(255,255,255,0.05); }
+  .row .pos { width: 22px; color: var(--muted); }
+  .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sc { font-variant-numeric: tabular-nums; }
+  .row.me, .row.me .pos { color: var(--accent); }
+  .lbempty { color: var(--dim); font-size: 14px; text-align: center; padding: 12px 0; }
   footer { display: flex; flex-direction: column; align-items: center; gap: 12px; }
   button {
     font: inherit; font-size: 16px; color: var(--text);
@@ -67,7 +87,12 @@
     <canvas id="game"></canvas>
     <div id="overlay">
       <h1 id="ovTitle">Змейка</h1>
-      <p id="ovSub">Нажми, чтобы начать</p>
+      <p id="ovSub">Введи имя и нажми «Играть»</p>
+      <div id="form">
+        <input id="name" type="text" maxlength="16" placeholder="Твоё имя" autocomplete="nickname" enterkeyhint="go">
+        <button id="playBtn" type="button">Играть</button>
+      </div>
+      <div id="lb"></div>
     </div>
   </div>
 
@@ -91,6 +116,74 @@
   const $ = id => document.getElementById(id);
   const scoreEl = $('score'), bestEl = $('best'), overlay = $('overlay');
   const ovTitle = $('ovTitle'), ovSub = $('ovSub'), pauseBtn = $('pauseBtn');
+  const nameEl = $('name'), playBtn = $('playBtn'), formEl = $('form'), lbEl = $('lb');
+
+  // ---------- Рейтинг (Supabase) ----------
+  const SB_URL = 'https://zdvkdleeiuopjtjutaum.supabase.co';
+  const SB_KEY = 'sb_publishable_5U__4qiFa4e_Jh3biQ3TQw_4HHeQpBk';
+  const HEADERS = { apikey: SB_KEY, 'Content-Type': 'application/json' };
+  let table = null, pending = 0;
+
+  try { nameEl.value = localStorage.getItem('snake-name') || ''; } catch (e) {}
+  nameEl.addEventListener('input', () => {
+    try { localStorage.setItem('snake-name', playerName()); } catch (e) {}
+  });
+
+  function playerName() { return nameEl.value.trim().replace(/\s+/g, ' '); }
+  const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+  function renderTable(message) {
+    lbEl.textContent = '';
+    const note = text => {
+      const d = document.createElement('div');
+      d.className = 'lbempty'; d.textContent = text; lbEl.appendChild(d);
+    };
+    if (message) return note(message);
+    if (!table || !table.length) return note('Пока никого нет — стань первым!');
+
+    const me = playerName();
+    table.slice(0, 10).forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'row' + (me && sameName(r.name, me) ? ' me' : '');
+      for (const [cls, text] of [['pos', i + 1], ['nm', r.name], ['sc', r.score]]) {
+        const c = document.createElement('span');
+        c.className = cls; c.textContent = text; row.appendChild(c);
+      }
+      lbEl.appendChild(row);
+    });
+  }
+
+  async function loadTable() {
+    try {
+      const r = await fetch(SB_URL + '/rest/v1/scores?select=name,score&order=score.desc&limit=300', { headers: HEADERS });
+      if (!r.ok) throw new Error(r.status);
+      const seen = new Set();
+      table = (await r.json()).filter(d => {
+        const k = d.name.trim().toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+      renderTable();
+    } catch (e) {
+      table = null; renderTable('Рейтинг пока недоступен');
+    }
+  }
+
+  async function trySubmit() {
+    const n = playerName();
+    if (pending <= 0 || !n) return;
+    const sc = pending; pending = 0;
+    const mine = table && table.find(d => sameName(d.name, n));
+    if (mine && mine.score >= sc) return;
+    try {
+      await fetch(SB_URL + '/rest/v1/scores', {
+        method: 'POST',
+        headers: { ...HEADERS, Prefer: 'return=minimal' },
+        body: JSON.stringify({ name: n, score: sc })
+      });
+    } catch (e) {}
+    loadTable();
+  }
 
   let snake, dir, inputs, food, score, best = 0, state = 'ready', interval, acc = 0, last = 0, dead = false, newRecord = false;
 
@@ -113,12 +206,16 @@
     food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
   }
 
-  function showOverlay(title, sub) {
+  function showOverlay(title, sub, full) {
     ovTitle.textContent = title; ovSub.textContent = sub;
+    formEl.style.display = full ? 'flex' : 'none';
+    lbEl.style.display = full ? 'block' : 'none';
     overlay.style.display = 'flex';
   }
 
   function start() {
+    trySubmit();
+    nameEl.blur();
     reset(); state = 'running';
     overlay.style.display = 'none';
     pauseBtn.textContent = 'Пауза';
@@ -175,9 +272,12 @@
       try { localStorage.setItem('snake-best', best); } catch (e) {}
     }
     if (navigator.vibrate && !won) navigator.vibrate(120);
+    pending = score;
+    const hint = playerName() ? '' : '\nВведи имя, чтобы попасть в рейтинг';
     showOverlay(won ? 'Победа!' : 'Игра окончена',
-      (newRecord ? 'Новый рекорд: ' + score : 'Счёт: ' + score) + '\nНажми, чтобы сыграть ещё раз');
+      (newRecord ? 'Новый рекорд: ' + score : 'Счёт: ' + score) + hint, true);
     pauseBtn.textContent = 'Заново';
+    trySubmit();
   }
 
   // ---------- Отрисовка ----------
@@ -240,6 +340,10 @@
     ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right'
   };
   window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') {
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); playBtn.click(); }
+      return;
+    }
     if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); togglePause(); return; }
     if (keys[e.code]) { e.preventDefault(); turn(DIRS[keys[e.code]]); }
   });
@@ -249,6 +353,7 @@
     tx = e.touches[0].clientX; ty = e.touches[0].clientY;
   }, { passive: true });
   document.addEventListener('touchmove', e => {
+    if (e.target.closest && e.target.closest('#lb')) return;
     e.preventDefault();
     const t = e.touches[0], dx = t.clientX - tx, dy = t.clientY - ty;
     if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
@@ -256,11 +361,17 @@
     tx = t.clientX; ty = t.clientY;
   }, { passive: false });
 
-  overlay.addEventListener('click', togglePause);
-  pauseBtn.addEventListener('click', () => { if (state === 'over') start(); else togglePause(); });
+  overlay.addEventListener('click', () => { if (state === 'paused') togglePause(); });
+  playBtn.addEventListener('click', () => { if (state === 'ready' || state === 'over') start(); });
+  pauseBtn.addEventListener('click', () => {
+    pauseBtn.blur();
+    if (state === 'over') start(); else togglePause();
+  });
   document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'running') togglePause(); });
 
   reset();
+  showOverlay('Змейка', 'Введи имя и нажми «Играть»', true);
+  loadTable();
   requestAnimationFrame(t => { last = t; loop(t); });
 })();
 </script>
